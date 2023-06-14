@@ -1,5 +1,8 @@
 import time
 import math
+import numpy as np
+import cv2
+from std_msgs.msg import Float32MultiArray
 
 from bosdyn.client import create_standard_sdk, ResponseError, RpcError
 from bosdyn.client.async_tasks import AsyncPeriodicQuery, AsyncTasks
@@ -30,12 +33,17 @@ import bosdyn.api.robot_state_pb2 as robot_state_proto
 from bosdyn.api import basic_command_pb2
 from google.protobuf.timestamp_pb2 import Timestamp
 
-front_image_sources = ['frontleft_fisheye_image', 'frontright_fisheye_image', 'frontleft_depth', 'frontright_depth']
+front_image_sources = ['frontleft_fisheye_image', 'frontright_fisheye_image', 'frontleft_depth_in_visual_frame', 'frontright_depth_in_visual_frame']
+#front_image_sources = ['frontleft_visual_in_depth_frame', 'frontright_visual_in_depth_frame', 'frontleft_depth', 'frontright_depth']
 """List of image sources for front image periodic query"""
-side_image_sources = ['left_fisheye_image', 'right_fisheye_image', 'left_depth', 'right_depth']
+side_image_sources = ['left_fisheye_image', 'right_fisheye_image', 'left_depth_in_visual_frame', 'right_depth_in_visual_frame']
+#side_image_sources = ['left_visual_in_depth_frame', 'right_visual_in_depth_frame', 'left_depth', 'right_depth']
 """List of image sources for side image periodic query"""
-rear_image_sources = ['back_fisheye_image', 'back_depth']
+rear_image_sources = ['back_fisheye_image', 'back_depth_in_visual_frame']
+#rear_image_sources = ['back_visual_in_depth_frame', 'back_depth']
 """List of image sources for rear image periodic query"""
+
+hand_image_sources = ['hand_color_image', 'hand_depth_in_hand_color_frame']
 
 class AsyncRobotState(AsyncPeriodicQuery):
     """Class to get robot state at regular intervals.  get_robot_state_async query sent to the robot at every tick.  Callback registered to defined callback function.
@@ -178,6 +186,12 @@ class AsyncIdle(AsyncPeriodicQuery):
             else:
                 self._spot_wrapper._last_velocity_command_time = None
 
+        if self._spot_wrapper._last_arm_command_time != None:
+            if time.time() < self._spot_wrapper._last_arm_command_time:
+                is_moving = True
+            else:
+                self._spot_wrapper._last_arm_command_time = None
+
         if self._spot_wrapper._last_trajectory_command != None:
             try:
                 response = self._client.robot_command_feedback(self._spot_wrapper._last_trajectory_command)
@@ -235,10 +249,12 @@ class SpotWrapper():
         self._last_trajectory_command = None
         self._last_trajectory_command_precise = None
         self._last_velocity_command_time = None
+        self._last_arm_command_time = None
 
         self._front_image_requests = []
         self._side_image_requests = []
         self._rear_image_requests = []
+        self._hand_image_requests = []
 
         self._cameras_used = cameras_used
 
@@ -246,6 +262,7 @@ class SpotWrapper():
             for source in front_image_sources:
                 self._front_image_requests.append(build_image_request(source, image_format=image_pb2.Image.FORMAT_RAW))
 
+        '''
         if "side" in cameras_used:
             for source in side_image_sources:
                 self._side_image_requests.append(build_image_request(source, image_format=image_pb2.Image.FORMAT_RAW))
@@ -253,6 +270,11 @@ class SpotWrapper():
         if "rear" in cameras_used:
             for source in rear_image_sources:
                 self._rear_image_requests.append(build_image_request(source, image_format=image_pb2.Image.FORMAT_RAW))
+
+        if "hand" in cameras_used:
+            for source in hand_image_sources:
+                self._hand_image_requests.append(build_image_request(source, image_format=image_pb2.Image.FORMAT_RAW))
+        '''
 
         try:
             self._sdk = create_standard_sdk('ros_spot')
@@ -300,23 +322,31 @@ class SpotWrapper():
             self._robot_metrics_task = AsyncMetrics(self._robot_state_client, self._logger, max(0.0, self._rates.get("metrics", 0.0)), self._callbacks.get("metrics", lambda:None))
             self._lease_task = AsyncLease(self._lease_client, self._logger, max(0.0, self._rates.get("lease", 0.0)), self._callbacks.get("lease", lambda:None))
 
+            '''
             if "front" in self._cameras_used:
                 self._front_image_task = AsyncImageService(self._image_client, self._logger, max(0.0, self._rates.get("front_image", 0.0)), self._callbacks.get("front_image", lambda:None), self._front_image_requests)
             if "side" in self._cameras_used:
                 self._side_image_task = AsyncImageService(self._image_client, self._logger, max(0.0, self._rates.get("side_image", 0.0)), self._callbacks.get("side_image", lambda:None), self._side_image_requests)
             if "rear" in self._cameras_used:
                 self._rear_image_task = AsyncImageService(self._image_client, self._logger, max(0.0, self._rates.get("rear_image", 0.0)), self._callbacks.get("rear_image", lambda:None), self._rear_image_requests)
+            if "hand" in self._cameras_used:
+                self._hand_image_task = AsyncImageService(self._image_client, self._logger, max(0.0, self._rates.get("hand_image", 0.0)), self._callbacks.get("rear_image", lambda:None), self._hand_image_requests)
             self._idle_task = AsyncIdle(self._robot_command_client, self._logger, 10.0, self)
+            '''
 
             self._estop_endpoint = None
 
-            tasks = [self._robot_state_task, self._robot_metrics_task, self._lease_task, self._idle_task]
+            tasks = [self._robot_state_task, self._robot_metrics_task, self._lease_task] #, self._idle_task]
+            '''
             if "front" in self._cameras_used:
                 tasks.append(self._front_image_task)
             if "side" in self._cameras_used:
                 tasks.append(self._side_image_task)
             if "rear" in self._cameras_used:
                 tasks.append(self._rear_image_task)
+            if "hand" in self._cameras_used:
+                tasks.append(self._hand_image_task)
+            '''
             self._async_tasks = AsyncTasks(tasks)
 
             self._robot_id = None
@@ -583,8 +613,7 @@ class SpotWrapper():
         """
         return self._mobility_params
 
-    def arm_pose_cmd(self, x, y, z, qx, qy, qz, qw):
-
+    def arm_pose_cmd(self, x, y, z, qx, qy, qz, qw, seconds=10):
         # Make the arm pose RobotCommand
         # Build a position to move the arm to (in meters, relative to and expressed in the gravity aligned body frame).
         hand_ewrt_flat_body = geometry_pb2.Vec3(x=x, y=y, z=z)
@@ -599,14 +628,33 @@ class SpotWrapper():
         odom_T_flat_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
                                          ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
 
-        odom_T_hand = odom_T_flat_body * math_helpers.SE3Pose.from_obj(flat_body_T_hand)
+        odom_T_hand = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+                                         ODOM_FRAME_NAME, "hand")
 
-        # duration in seconds
-        seconds = 2
+        #dhand is desired hand pose
+        odom_T_dhand = odom_T_flat_body * math_helpers.SE3Pose.from_obj(flat_body_T_hand)
 
+
+        hand_pose_np = np.array([odom_T_hand.position.x, odom_T_hand.position.y, odom_T_hand.position.z])
+        dhand_pose_np = np.array([odom_T_dhand.position.x, odom_T_dhand.position.y, odom_T_dhand.position.z])
+
+        pos_diff_norm = np.linalg.norm(hand_pose_np-dhand_pose_np)
+
+        threshold = 0.01
+
+        if pos_diff_norm < threshold:
+            # for small movements, increase duration of action - decreasing velocity?
+            print("smol: ", pos_diff_norm)
+            return
+
+        # duration in seconds is stored in seconds
+        # arm_command = RobotCommandBuilder.arm_pose_command(
+        #     odom_T_dhand.x, odom_T_dhand.y, odom_T_dhand.z, odom_T_dhand.rot.w, odom_T_dhand.rot.x,
+        #     odom_T_dhand.rot.y, odom_T_dhand.rot.z, ODOM_FRAME_NAME, seconds)
         arm_command = RobotCommandBuilder.arm_pose_command(
-            odom_T_hand.x, odom_T_hand.y, odom_T_hand.z, odom_T_hand.rot.w, odom_T_hand.rot.x,
-            odom_T_hand.rot.y, odom_T_hand.rot.z, ODOM_FRAME_NAME, seconds)
+            odom_T_dhand.x, odom_T_dhand.y, odom_T_dhand.z, odom_T_dhand.rot.w, odom_T_dhand.rot.x,
+            odom_T_dhand.rot.y, odom_T_dhand.rot.z, ODOM_FRAME_NAME, seconds)
+
 
         # Make the open gripper RobotCommand
         gripper_command = RobotCommandBuilder.claw_gripper_open_fraction_command((robot_state.manipulator_state.gripper_open_percentage)/100.0)
@@ -616,8 +664,118 @@ class SpotWrapper():
 
         # Send the request
         cmd_id = self._robot_command(command)
+        return cmd_id # Are added this so we can access trajectory plan from feedback response
 
-    def velocity_cmd(self, v_x, v_y, v_rot, cmd_duration=0.125):
+
+    def set_gripper(self, gripper_value):
+        # Either open the gripper all the way, or slowly subtract from its value
+        robot_state = self._robot_state_client.get_robot_state()
+
+        if gripper_value > 0.0:
+            # sets grip open to the passed in value
+            robot_state.manipulator_state.gripper_open_percentage = gripper_value
+        elif robot_state.manipulator_state.gripper_open_percentage >= -1.0 * gripper_value:
+            # subtracts the amount of the command
+            #robot_state.manipulator_state.gripper_open_percentage += gripper_value
+            robot_state.manipulator_state.gripper_open_percentage = 0.0
+        else:
+            # set all the way to 0
+            robot_state.manipulator_state.gripper_open_percentage = 0.0
+        gripper_command = RobotCommandBuilder.claw_gripper_open_fraction_command((robot_state.manipulator_state.gripper_open_percentage)/100.0)
+        cmd_id = self._robot_command(gripper_command)
+
+        # Opens the gripper
+        # rostopic pub -r 10 /spot/set_gripper geometry_msgs/Twist -- '[100.0, 0.0, 0.0]' '[0.0, 0.0, 0.0]'
+
+
+    def arm_move_command(self, dx, dy, dz, dqx, dqy, dqz, dqw, cmd_duration=0.1):
+
+        # get the current pose information
+        robot_state = self._robot_state_client.get_robot_state()
+        grav_aligned_body_T_hand = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+                                         GRAV_ALIGNED_BODY_FRAME_NAME, "hand")
+        print("The current arm position is {}".format(grav_aligned_body_T_hand))
+
+        end_time=time.time() + cmd_duration
+
+        # get_a_tform_b returns a SE3Pose, which stores x,y,z, and a quaternion rot
+        # Calculate the new position
+        x = grav_aligned_body_T_hand.x + dx
+        y = grav_aligned_body_T_hand.y + dy
+        z = grav_aligned_body_T_hand.z + dz
+
+        qx = grav_aligned_body_T_hand.rot.x + dqx
+        qy = grav_aligned_body_T_hand.rot.y + dqy
+        qz = grav_aligned_body_T_hand.rot.z + dqz
+        qw = grav_aligned_body_T_hand.rot.w + dqw
+
+        # call arm_pose_command
+        self.arm_pose_cmd(x, y, z, qx, qy, qz, qw, seconds=0.1)
+        self._last_arm_command_time = end_time
+
+        # Move forward
+        # rostopic pub -r 100 /cmd_vel geometry_msgs/Twist -- '[0.5, 0.0, 0.0]' '[0.0, 0.0, 0.0]'
+
+        # Move right
+        # rostopic pub -r 100 /cmd_vel geometry_msgs/Twist -- '[0.0, -0.5, 0.0]' '[0.0, 0.0, 0.0]'
+
+        # Rotate base
+        # rostopic pub -r 100 /cmd_vel geometry_msgs/Twist -- '[0.0, 0.0, 0.0]' '[0.0, 0.0, 1.0]'
+
+        # Move arm up
+        # rostopic pub -r 100 /spot/arm_move geometry_msgs/Twist -- '[0.0, 0.3, 0.0]' '[0.0, 0.0, 0.0]'
+
+
+    def arm_stow_command(self):
+        #unstow = RobotCommandBuilder.arm_ready_command()
+        stow = RobotCommandBuilder.arm_stow_command()
+        # Send the request
+        stow_command_id = self._robot_command(stow)
+        print("Stow command issued")
+
+        # rostopic pub -r 10 /spot/arm_stow std_msgs/Bool -- 'True'
+
+    def arm_unstow_command(self):
+        #unstow = RobotCommandBuilder.arm_ready_command()
+        unstow = RobotCommandBuilder.arm_ready_command()
+        # Send the request
+        unstow_command_id = self._robot_command(unstow)
+        print("Unstow command issued")
+
+        # rostopic pub -l /spot/arm_unstow geometry_msgs/Twist -- '[0.0, 0.0, 0.0]' '[0.0, 0.0, 0.0]'
+
+
+    # not in use currently. Gets publishable float 32 arrays based on the provided color and depth sources
+    def getDepthData32(self, color_data, depth_data, color=False):        
+        # Depth is a raw bytestream
+        # import pdb
+        cv_depth = np.frombuffer(depth_data.shot.image.data, dtype=np.uint16)
+        cv_depth = cv_depth.reshape(depth_data.shot.image.rows,
+                                    depth_data.shot.image.cols)
+
+        #cv_depth is in millimeters, divide by 1000 to get it into meters
+        cv_depth_meters = cv_depth / 1000.0
+
+        # Visual is a JPEG
+        cv_visual = cv2.imdecode(np.frombuffer(color_data.shot.image.data, dtype=np.uint8), -1)
+        
+        
+        # Convert the visual image from a single channel to RGB so we can add color
+        visual_rgb = cv_visual if len(cv_visual.shape) == 3 else cv2.cvtColor(cv_visual, cv2.COLOR_GRAY2RGB)
+        visual_rgb = visual_rgb.astype('float') / 255.0
+
+        return Float32MultiArray(None, cv_depth_meters.astype('float').flatten().tolist()), Float32MultiArray(None, visual_rgb.astype('float').flatten().tolist())
+
+
+    def getDepthData8(self, image_responses):
+        # Depth is a raw bytestream
+        cv_depth = np.frombuffer(image_responses[0].shot.image.data, dtype=np.uint8)
+        # cv_depth is in millimeters, divide by 1000 to get it into meters
+        # cv_depth_meters = cv_depth / 1000.0
+        return cv_depth
+
+
+    def velocity_cmd(self, v_x, v_y, v_rot, cmd_duration=0.1):
         """Send a velocity motion command to the robot.
 
         Args:
@@ -631,6 +789,8 @@ class SpotWrapper():
                                       v_x=v_x, v_y=v_y, v_rot=v_rot, params=self._mobility_params),
                                       end_time_secs=end_time, timesync_endpoint=self._robot.time_sync.endpoint)
         self._last_velocity_command_time = end_time
+        print("Velocity command response")
+        print(response)
         return response[0], response[1]
 
     def trajectory_cmd(self, goal_x, goal_y, goal_heading, cmd_duration, frame_name='odom', precise_position=False):
