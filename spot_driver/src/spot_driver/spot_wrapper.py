@@ -10,6 +10,7 @@ from bosdyn.geometry import EulerZXY
 
 from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.client.robot_command import RobotCommandClient, RobotCommandBuilder
+from bosdyn.client.manipulation_api_client import ManipulationApiClient
 from bosdyn.client.graph_nav import GraphNavClient
 from bosdyn.client.frame_helpers import get_odom_tform_body
 from bosdyn.client.frame_helpers import *
@@ -26,12 +27,35 @@ from bosdyn.client import power
 from bosdyn.client import frame_helpers
 from bosdyn.client import math_helpers
 from bosdyn.client.exceptions import InternalServerError
+from geometry_msgs.msg import Pose, Point, Quaternion
 
 from . import graph_nav_util
 
 import bosdyn.api.robot_state_pb2 as robot_state_proto
-from bosdyn.api import basic_command_pb2
+from bosdyn.api import basic_command_pb2, arm_command_pb2, manipulation_api_pb2, robot_command_pb2, mobility_command_pb2
 from google.protobuf.timestamp_pb2 import Timestamp
+
+########
+# Janeth edits for IK api call to bosdyn
+import bosdyn.client.util
+from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
+from bosdyn.api.spot.inverse_kinematics_pb2 import (InverseKinematicsRequest,
+                                                    InverseKinematicsResponse)
+from bosdyn.client.frame_helpers import (BODY_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME,
+                                         GROUND_PLANE_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b)
+from bosdyn.client.inverse_kinematics import InverseKinematicsClient
+from bosdyn.client.robot_command import (RobotCommandBuilder, RobotCommandClient,
+                                         block_until_arm_arrives, blocking_stand)
+from bosdyn.util import seconds_to_duration
+########
+
+def make_robot_command(arm_joint_traj): #UNDERGRADS (6-20-23 11am)
+    joint_move_command = arm_command_pb2.ArmJointMoveCommand.Request(trajectory=arm_joint_traj)
+    arm_command = arm_command_pb2.ArmCommand.Request(arm_joint_move_command=joint_move_command)
+    sync_arm = synchronized_command_pb2.SynchronizedCommand.Request(arm_command=arm_command)
+    arm_sync_robot_cmd = robot_command_pb2.RobotCommand(synchronized_command=sync_arm)
+    
+    return RobotCommandBuilder.build_synchro_command(arm_sync_robot_cmd)
 
 front_image_sources = ['frontleft_fisheye_image', 'frontright_fisheye_image', 'frontleft_depth_in_visual_frame', 'frontright_depth_in_visual_frame']
 #front_image_sources = ['frontleft_visual_in_depth_frame', 'frontright_visual_in_depth_frame', 'frontleft_depth', 'frontright_depth']
@@ -298,6 +322,7 @@ class SpotWrapper():
             try:
                 self._robot_state_client = self._robot.ensure_client(RobotStateClient.default_service_name)
                 self._robot_command_client = self._robot.ensure_client(RobotCommandClient.default_service_name)
+                self._manipulation_client = self._robot.ensure_client(ManipulationApiClient.default_service_name)
                 self._graph_nav_client = self._robot.ensure_client(GraphNavClient.default_service_name)
                 self._power_client = self._robot.ensure_client(PowerClient.default_service_name)
                 self._lease_client = self._robot.ensure_client(LeaseClient.default_service_name)
@@ -470,6 +495,10 @@ class SpotWrapper():
     def updateTasks(self):
         """Loop through all periodic tasks and update their data if needed."""
         try:
+            from time import time
+            if 'last_time' not in globals(): global last_time 
+            else: pass#(time()-last_time)
+            last_time = time()
             self._async_tasks.update()
         except Exception as e:
             print(f"Update tasks failed with error: {str(e)}")
@@ -613,7 +642,19 @@ class SpotWrapper():
         """
         return self._mobility_params
 
+    def arm_move_once_cmd(self, angles): # written by undergrads summer 2023 for spot arm visualization
+       # import pdb
+       # pdb.set_trace()
+       # print(angles)
+        traj_point = RobotCommandBuilder.create_arm_joint_trajectory_point(angles[0], angles[1], angles[2],
+                angles[3], angles[4], angles[5]) # create trajectory destination from the given joint angles
+        arm_joint_traj = arm_command_pb2.ArmJointTrajectory(points=[traj_point])
+        command = make_robot_command(arm_joint_traj)
+        cmd_id = self._robot_command(command) # make command to spot to move the joints 
+       # print(self._robot_state_client.get_robot_state()) # for debugging; get the current robot state and print out the current joint angles
+
     def arm_pose_cmd(self, x, y, z, qx, qy, qz, qw, seconds=10):
+        print(x)
         # Make the arm pose RobotCommand
         # Build a position to move the arm to (in meters, relative to and expressed in the gravity aligned body frame).
         hand_ewrt_flat_body = geometry_pb2.Vec3(x=x, y=y, z=z)
@@ -654,8 +695,18 @@ class SpotWrapper():
         arm_command = RobotCommandBuilder.arm_pose_command(
             odom_T_dhand.x, odom_T_dhand.y, odom_T_dhand.z, odom_T_dhand.rot.w, odom_T_dhand.rot.x,
             odom_T_dhand.rot.y, odom_T_dhand.rot.z, ODOM_FRAME_NAME, seconds)
+        #print(f'odom x: {odom_T_dhand.x}')
+        #arm_command = RobotCommandBuilder.arm_gaze_command(
+        #        odom_T_dhand.x, odom_T_dhand.y, odom_T_dhand.z, "trajectory?")
+        
+        #gripper_command = RobotCommandBuilder.claw_gripper_open_command()
+        #synchro_command = RobotCommandBuilder.build_synchro_command(gripper_command, arm_command)
+        
+        #gaze_command_id = self._robot_state_client.robot_command(synchro_command)
 
-
+        #block_until_arm_arrives(command_client, gaze_command_id, 5.0)
+        
+        #return gaze_command_id
         # Make the open gripper RobotCommand
         gripper_command = RobotCommandBuilder.claw_gripper_open_fraction_command((robot_state.manipulator_state.gripper_open_percentage)/100.0)
 
@@ -663,8 +714,11 @@ class SpotWrapper():
         command = RobotCommandBuilder.build_synchro_command(gripper_command, arm_command)
 
         # Send the request
-        cmd_id = self._robot_command(command)
-        return cmd_id # Are added this so we can access trajectory plan from feedback response
+        _, _, cmd_id = self._robot_command(arm_command)
+        time.sleep(5)
+        #return self._robot_command_client._get_robot_command_feedback_request(cmd_id)#WRITTEN BY THE UNDERGRADS (6/15/23 2pm)
+        return self._robot_command_client.robot_command_feedback(cmd_id) # Are added this so we can access trajectory plan from feedback response
+        # return cmd_id # Are added this so we can access trajectory plan from feedback response
 
 
     def set_gripper(self, gripper_value):
@@ -686,7 +740,7 @@ class SpotWrapper():
 
         # Opens the gripper
         # rostopic pub -r 10 /spot/set_gripper geometry_msgs/Twist -- '[100.0, 0.0, 0.0]' '[0.0, 0.0, 0.0]'
-
+    
 
     def arm_move_command(self, dx, dy, dz, dqx, dqy, dqz, dqw, cmd_duration=0.1):
 
@@ -716,6 +770,9 @@ class SpotWrapper():
         # Move forward
         # rostopic pub -r 100 /cmd_vel geometry_msgs/Twist -- '[0.5, 0.0, 0.0]' '[0.0, 0.0, 0.0]'
 
+        # Move up
+        # rostopic pub -r 100 /cmd_vel geometry_msgs/Twist -- '[0.0, 0.0, 0.0]' '[0.0, 0.0, 0.0]'
+
         # Move right
         # rostopic pub -r 100 /cmd_vel geometry_msgs/Twist -- '[0.0, -0.5, 0.0]' '[0.0, 0.0, 0.0]'
 
@@ -725,14 +782,50 @@ class SpotWrapper():
         # Move arm up
         # rostopic pub -r 100 /spot/arm_move geometry_msgs/Twist -- '[0.0, 0.3, 0.0]' '[0.0, 0.0, 0.0]'
 
+    def get_intrinsics(self):
+        image_sources = self._image_client.list_image_sources()
+        used_sources = ['hand_depth_in_hand_color_frame', 
+                        'frontleft_depth_in_visual_frame', 
+                        'frontright_depth_in_visual_frame', 
+                        'left_depth_in_visual_frame',
+                        'right_depth_in_visual_frame',
+                        'back_depth_in_visual_frame']
+        out_list = [0.0 for i in range(len(used_sources)*4)]
+        for source in image_sources:
+            if source.name in used_sources:
+                start_ind = used_sources.index(source.name) * 4
+                intrinsics = source.pinhole.intrinsics
+                # FX
+                out_list[start_ind] = intrinsics.focal_length.x
+                # FY
+                out_list[start_ind+1] = intrinsics.focal_length.y
+                # CX
+                out_list[start_ind+2] = intrinsics.principal_point.x
+                # CY
+                out_list[start_ind+3] = intrinsics.principal_point.y
+        out_list = [float(x) for x in out_list]
+        return out_list
 
     def arm_stow_command(self):
         #unstow = RobotCommandBuilder.arm_ready_command()
         stow = RobotCommandBuilder.arm_stow_command()
+
+        carriable_and_stowable_override = manipulation_api_pb2.ApiGraspedCarryStateOverride(
+            override_request=robot_state_proto.ManipulatorState.CARRY_STATE_CARRIABLE_AND_STOWABLE)
+        grasp_holding_override = manipulation_api_pb2.ApiGraspOverride(
+            override_request=manipulation_api_pb2.ApiGraspOverride.OVERRIDE_HOLDING)
+
+        override_request = manipulation_api_pb2.ApiGraspOverrideRequest(
+            api_grasp_override=grasp_holding_override,
+            carry_state_override=carriable_and_stowable_override)
+            
+
+        self._manipulation_client.grasp_override_command(override_request)
+
         # Send the request
         stow_command_id = self._robot_command(stow)
+        
         print("Stow command issued")
-
         # rostopic pub -r 10 /spot/arm_stow std_msgs/Bool -- 'True'
 
     def arm_unstow_command(self):
@@ -775,7 +868,7 @@ class SpotWrapper():
         return cv_depth
 
 
-    def velocity_cmd(self, v_x, v_y, v_rot, cmd_duration=0.1):
+    def velocity_cmd(self, v_x, v_y, v_rot, height, cmd_duration=0.1):
         """Send a velocity motion command to the robot.
 
         Args:
@@ -784,14 +877,284 @@ class SpotWrapper():
             v_rot: Angular velocity around the Z axis in radians
             cmd_duration: (optional) Time-to-live for the command in seconds.  Default is 125ms (assuming 10Hz command rate).
         """
+        # Are adding code to allow for changing spot body orientation, to raise the orientation of the front body cams
+        footprint_R_body = EulerZXY(yaw=0.0, roll=0.0, pitch=0.0) # Around 30degrees pitch rotation change pitch to -0.5
+        # End of Are's added code
         end_time=time.time() + cmd_duration
+
+        self._mobility_params = RobotCommandBuilder.mobility_params(body_height=height)#, footprint_R_body=footprint_R_body) # Added footprint_R_body to parameter - Are
+
+        # note: (janeth) change command to include both arm and body movement
+        # command = robot_command_pb2.RobotCommand()
+        # # set the frame for the hand trajectory
+        # # populate this command with points for the arm using 
+        # command.synchronized_command.arm_command.arm_cartesian_command.root_frame_name = BODY_FRAME_NAME
+        # point = command.synchronized_command.arm_command.arm_cartesian_command.pose_trajectory_in_task.points.add()
+
+        # k = RobotCommandBuilder.
+        
+
+        # # set frame for body trajectory
+        # command.synchronized_command.mobility_command.se2_trajectory_request.se2_frame_name = BODY_FRAME_NAME
+        # END
+
+        #### Calvin
+        # Build the linear velocity command specified in a cylindrical coordinate system
+        # cylindrical_velocity = arm_command_pb2.ArmVelocityCommand.CylindricalVelocity()
+        # cylindrical_velocity.linear_velocity.r = v_x
+        # cylindrical_velocity.linear_velocity.theta = v_rot
+        # cylindrical_velocity.linear_velocity.z = 0
+
+        # arm_velocity_command = arm_command_pb2.ArmCommand.Request(
+        #     cylindrical_velocity=cylindrical_velocity,
+        #     end_time=self._robot.time_sync.robot_timestamp_from_local_secs(end_time))
+
+
+        # # linear = geometry_pb2.Vec2(x=v_x, y=v_y)
+        # # vel = geometry_pb2.SE2Velocity(linear=linear, angular=v_rot)
+        # # mobility_command = mobility_command_pb2.MobilityCommand.Request(
+        # #     se2_velocity_request=vel_command, params=self._mobility_params)
+
+        # base_velocity_command = RobotCommandBuilder.synchro_velocity_command(
+        #     v_x=v_x, 
+        #     v_y=v_y,
+        #     v_rot=v_rot, 
+        #     params=self._mobility_params, 
+        #     build_on_command=arm_velocity_command)
+
+        # response = self._robot_command(base_velocity_command, end_time_secs=end_time, timesync_endpoint=self._robot.time_sync.endpoint)
+
+        #### End Calvin
+
         response = self._robot_command(RobotCommandBuilder.synchro_velocity_command(
                                       v_x=v_x, v_y=v_y, v_rot=v_rot, params=self._mobility_params),
                                       end_time_secs=end_time, timesync_endpoint=self._robot.time_sync.endpoint)
+                                      
         self._last_velocity_command_time = end_time
-        print("Velocity command response")
-        print(response)
+        # print("Velocity command response")
+        # print(response)
         return response[0], response[1]
+
+    def move_robot_using_ik(self, data):
+        # rostopic pub -r 100 /spot/inv_kinematics geometry_msgs/Twist -- '[0.5, 0.0, 0.0]' '[0.0, 0.0, 0.0]'
+        # rostopic pub -r 10 /spot/arm_stow std_msgs/Bool -- 'True'
+        # bosdyn.client.robot.UnregisteredServiceNameError: service name "inverse-kinematics" has not been registered
+
+        # CODE FOUND IN: /spot-sdk/python/examples/inverse_kinematics/reachability.py
+        assert self._robot.has_arm(), 'Robot requires an arm to run IK'
+        
+        x_tomove = 0.5
+        y_tomove = 0.5
+        z_tomove = 0.5
+        task_T_desired_tool = math_helpers.SE3Pose(x=x_tomove, y=y_tomove, z=0.0, rot=math_helpers.Quat())
+
+        # These arrays store the reachability results as determined by the IK responses (`reachable_ik`)
+        # or by trying to move to the desired tool pose (`reachable_cmd`).
+        reachable_ik = False
+        reachable_cmd = False
+
+        # This list will store the (x, y) coordinates of the feet relative to the task frame, so that
+        # the support polygon can be drawn in the output plot for reference.
+        # foot_coords = []
+
+        # Define a stand command that we'll send if the IK service does not find a solution.
+        body_control = spot_command_pb2.BodyControlParams(
+            body_assist_for_manipulation=spot_command_pb2.BodyControlParams.
+            BodyAssistForManipulation(enable_hip_height_assist=True, enable_body_yaw_assist=True))
+        body_assist_enabled_stand_command = RobotCommandBuilder.synchro_stand_command(
+            params=spot_command_pb2.MobilityParams(body_control=body_control))
+
+        # # Define the task frame to be in front of the robot and near the ground
+        robot_state = self._robot_state_client.get_robot_state()
+        odom_T_grav_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+                                         ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+
+        odom_T_gpe = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot, ODOM_FRAME_NAME,
+                                   GROUND_PLANE_FRAME_NAME)
+
+        # Construct the frame on the ground right underneath the center of the body.
+        odom_T_ground_body = odom_T_grav_body
+        odom_T_ground_body.z = odom_T_gpe.z
+
+        # Now, construct a task frame slightly above the ground, in front of the robot.
+        odom_T_task = odom_T_ground_body * math_helpers.SE3Pose(x=0.4, y=0, z=0.05, rot=math_helpers.Quat(w=1, x=0, y=0, z=0))
+
+        # Now, let's set our tool frame to be the tip of the robot's bottom jaw. Flip the
+        # orientation so that when the hand is pointed downwards, the tool's z-axis is
+        # pointed upward.
+        wr1_T_tool = math_helpers.SE3Pose(0.23589, 0, -0.03943, math_helpers.Quat.from_pitch(-math.pi / 2))
+
+        # Populate the foot positions relative to the task frame for plotting later.
+        odom_T_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+                                    ODOM_FRAME_NAME, BODY_FRAME_NAME)
+        task_T_body = odom_T_task.inverse() * odom_T_body
+        # for foot_index in [0, 1, 3, 2]:
+        #     foot_state = robot_state.foot_state[foot_index]
+        #     foot_position_rt_task = task_T_body.transform_vec3(foot_state.foot_position_rt_body)
+        #     foot_coords.append((foot_position_rt_task.x, foot_position_rt_task.y))
+
+        # Unstow the arm
+        unstow = RobotCommandBuilder.arm_ready_command(
+            build_on_command=body_assist_enabled_stand_command)
+        ready_command_id = self._robot_command(unstow)
+        self._robot.logger.info('Going to "ready" pose')
+        # print("READY ID: ", ready_command_id)
+        block_until_arm_arrives(self._robot_command_client, ready_command_id[-1], 3.0) # function expects an integer for second index, but ready_command is a 3-element tuple
+
+        # Create a client for the IK service.
+        self._robot.sync_with_directory()
+        ik_client = self._robot.ensure_client(InverseKinematicsClient.default_service_name)
+
+        ik_request = InverseKinematicsRequest(
+            root_frame_name=ODOM_FRAME_NAME,
+            scene_tform_task=odom_T_task.to_proto(),
+            wrist_mounted_tool=InverseKinematicsRequest.WristMountedTool(
+                wrist_tform_tool=wr1_T_tool.to_proto()),
+            tool_pose_task=InverseKinematicsRequest.ToolPoseTask(
+                task_tform_desired_tool=task_T_desired_tool.to_proto()),
+        )
+        ik_responses = ik_client.inverse_kinematics(ik_request)
+        reachable_ik = (ik_responses.status == InverseKinematicsResponse.STATUS_OK)
+
+        # Attempt to move to each of the desired tool pose to check the IK results.
+        stand_command = None
+        if ik_responses.status == InverseKinematicsResponse.STATUS_OK:
+            odom_T_desired_body = get_a_tform_b(
+                ik_responses.robot_configuration.transforms_snapshot, ODOM_FRAME_NAME,
+                BODY_FRAME_NAME)
+            mobility_params = spot_command_pb2.MobilityParams(
+                body_control=spot_command_pb2.BodyControlParams(
+                    body_pose=RobotCommandBuilder.body_pose(ODOM_FRAME_NAME,
+                                                            odom_T_desired_body.to_proto())))
+            stand_command = RobotCommandBuilder.synchro_stand_command(params=mobility_params)
+        else:
+            stand_command = body_assist_enabled_stand_command
+        arm_command = RobotCommandBuilder.arm_pose_command_from_pose(
+            (odom_T_task * task_T_desired_tool).to_proto(), ODOM_FRAME_NAME, 1,
+            build_on_command=stand_command)
+        arm_command.synchronized_command.arm_command.arm_cartesian_command.wrist_tform_tool.CopyFrom(
+            wr1_T_tool.to_proto())
+        arm_command_id = self._robot_command(arm_command)
+        print("arm command: ", arm_command_id)
+        reachable_cmd = block_until_arm_arrives(self._robot_command_client, arm_command_id[-1], 2) # function expects an integer for second index, but ready_command is a 3-element tuple
+        
+
+        '''
+        # The desired tool poses are defined relative to a task frame in front of the robot and slightly
+        # above the ground. The task frame is aligned with the "gravity aligned body frame", such that
+        # the positive-x direction is to the front of the robot, the positive-y direction is to the left
+        # of the robot, and the positive-z direction is opposite to gravity.
+        rng = np.random.RandomState(0)
+        num_poses = 50
+        x_size = 0.7  # m
+        y_size = 0.8  # m
+        x_rt_task = x_size * rng.random(num_poses)
+        y_rt_task = -y_size / 2 + y_size * rng.random(num_poses)
+        # z_rt_task = -z_size / 2 + z_size * rng.random(num_poses) # z position for future use
+        # task_T_desired_tools = [
+        #     math_helpers.SE3Pose(x=xi_rt_task, y=yi_rt_task, z=0.0, rot=math_helpers.Quat())
+        #     for (xi_rt_task, yi_rt_task) in zip(x_rt_task.flatten(), y_rt_task.flatten())
+        # ]
+
+        # These arrays store the reachability results as determined by the IK responses (`reachable_ik`)
+        # or by trying to move to the desired tool pose (`reachable_cmd`).
+        reachable_ik = np.full(x_rt_task.shape, False)
+        reachable_cmd = np.full(x_rt_task.shape, False)
+
+        # This list will store the (x, y) coordinates of the feet relative to the task frame, so that
+        # the support polygon can be drawn in the output plot for reference.
+        foot_coords = []
+
+        # Define a stand command that we'll send if the IK service does not find a solution.
+        body_control = spot_command_pb2.BodyControlParams(
+            body_assist_for_manipulation=spot_command_pb2.BodyControlParams.
+            BodyAssistForManipulation(enable_hip_height_assist=True, enable_body_yaw_assist=True))
+        body_assist_enabled_stand_command = RobotCommandBuilder.synchro_stand_command(
+            params=spot_command_pb2.MobilityParams(body_control=body_control))
+
+        # # Define the task frame to be in front of the robot and near the ground
+        # robot_state = self._robot_state_client.get_robot_state()
+        # odom_T_grav_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+        #                                  ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+
+        # odom_T_gpe = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot, ODOM_FRAME_NAME,
+        #                            GROUND_PLANE_FRAME_NAME)
+
+        # # Construct the frame on the ground right underneath the center of the body.
+        # odom_T_ground_body = odom_T_grav_body
+        # odom_T_ground_body.z = odom_T_gpe.z
+
+        # Now, construct a task frame slightly above the ground, in front of the robot.
+        # odom_T_task = odom_T_ground_body * math_helpers.SE3Pose(x=0.4, y=0, z=0.05, rot=math_helpers.Quat(w=1, x=0, y=0, z=0))
+
+        # Now, let's set our tool frame to be the tip of the robot's bottom jaw. Flip the
+        # orientation so that when the hand is pointed downwards, the tool's z-axis is
+        # pointed upward.
+        wr1_T_tool = math_helpers.SE3Pose(0.23589, 0, -0.03943, math_helpers.Quat.from_pitch(-math.pi / 2))
+
+        # Populate the foot positions relative to the task frame for plotting later.
+        # odom_T_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+                                    # ODOM_FRAME_NAME, BODY_FRAME_NAME)
+        # # task_T_body = odom_T_task.inverse() * odom_T_body
+        # for foot_index in [0, 1, 3, 2]:
+        #     foot_state = robot_state.foot_state[foot_index]
+        #     foot_position_rt_task = task_T_body.transform_vec3(foot_state.foot_position_rt_body)
+        #     foot_coords.append((foot_position_rt_task.x, foot_position_rt_task.y))
+
+        # Unstow the arm
+        unstow = RobotCommandBuilder.arm_ready_command(
+            build_on_command=body_assist_enabled_stand_command)
+        ready_command_id = self._robot_command(unstow)
+        self._robot.logger.info('Going to "ready" pose')
+        # print("READY ID: ", ready_command_id)
+        block_until_arm_arrives(self._robot_command_client, ready_command_id[-1], 3.0) # function expects an integer for second index, but ready_command is a 3-element tuple
+
+        # Create a client for the IK service.
+        self._robot.sync_with_directory()
+        ik_client = self._robot.ensure_client(InverseKinematicsClient.default_service_name)
+        ik_responses = []
+        for i, task_T_desired_tool in enumerate(task_T_desired_tools):
+            # Query the IK service for the reachability of the desired tool pose.
+            # Construct the IK request for this reachability problem. Note that since
+            # `root_tform_scene` is unset, the "scene" frame is the same as the "root" frame in this
+            # case.
+            ik_request = InverseKinematicsRequest(
+                root_frame_name=ODOM_FRAME_NAME,
+                # scene_tform_task=odom_T_task.to_proto(),
+                wrist_mounted_tool=InverseKinematicsRequest.WristMountedTool(
+                    wrist_tform_tool=wr1_T_tool.to_proto()),
+                tool_pose_task=InverseKinematicsRequest.ToolPoseTask(
+                    task_tform_desired_tool=task_T_desired_tool.to_proto()),
+            )
+            ik_responses.append(ik_client.inverse_kinematics(ik_request))
+            reachable_ik[i] = (ik_responses[i].status == InverseKinematicsResponse.STATUS_OK)
+
+            # Attempt to move to each of the desired tool pose to check the IK results.
+            stand_command = None
+            if ik_responses[i].status == InverseKinematicsResponse.STATUS_OK:
+                odom_T_desired_body = get_a_tform_b(
+                    ik_responses[i].robot_configuration.transforms_snapshot, ODOM_FRAME_NAME,
+                    BODY_FRAME_NAME)
+                mobility_params = spot_command_pb2.MobilityParams(
+                    body_control=spot_command_pb2.BodyControlParams(
+                        body_pose=RobotCommandBuilder.body_pose(ODOM_FRAME_NAME,
+                                                                odom_T_desired_body.to_proto())))
+                stand_command = RobotCommandBuilder.synchro_stand_command(params=mobility_params)
+            else:
+                stand_command = body_assist_enabled_stand_command
+            arm_command = RobotCommandBuilder.arm_pose_command_from_pose(
+                (odom_T_task * task_T_desired_tool).to_proto(), ODOM_FRAME_NAME, 1,
+                build_on_command=stand_command)
+            arm_command.synchronized_command.arm_command.arm_cartesian_command.wrist_tform_tool.CopyFrom(
+                wr1_T_tool.to_proto())
+            arm_command_id = self._robot_command(arm_command)
+            print("arm command: ", arm_command_id)
+            reachable_cmd[i] = block_until_arm_arrives(self._robot_command_client, arm_command_id[-1], 2) # function expects an integer for second index, but ready_command is a 3-element tuple
+            # import pdb
+            # pdb.set_trace()
+
+            '''
+        
 
     def trajectory_cmd(self, goal_x, goal_y, goal_heading, cmd_duration, frame_name='odom', precise_position=False):
         """Send a trajectory motion command to the robot.

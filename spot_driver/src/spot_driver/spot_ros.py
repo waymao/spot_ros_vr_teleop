@@ -1,12 +1,12 @@
 import rospy
 
 from std_srvs.srv import Trigger, TriggerResponse, SetBool, SetBoolResponse
-from std_msgs.msg import Bool, Float32MultiArray, UInt8MultiArray, UInt16MultiArray
+from std_msgs.msg import Float64, Bool, Float32MultiArray, Float64MultiArray, UInt8MultiArray, UInt16MultiArray
 from tf2_msgs.msg import TFMessage
 from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import Image, CameraInfo
 from sensor_msgs.msg import JointState
-from geometry_msgs.msg import TwistWithCovarianceStamped, Twist, Pose, PoseStamped
+from geometry_msgs.msg import TwistWithCovarianceStamped, Twist, Pose, PoseStamped, Point
 from nav_msgs.msg import Odometry
 
 from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
@@ -103,6 +103,9 @@ class SpotROS():
             # Battery States #
             battery_states_array_msg = GetBatteryStatesFromState(state, self.spot_wrapper)
             self.battery_pub.publish(battery_states_array_msg)
+            # battery percentage 
+            battery_percentage_msg = battery_states_array_msg.battery_states[0].charge_percentage
+            self.battery_percentage_pub.publish(battery_percentage_msg)
 
             # Power State #
             power_state_msg = GetPowerStatesFromState(state, self.spot_wrapper)
@@ -411,7 +414,11 @@ class SpotROS():
 
     def cmdVelCallback(self, data):
         """Callback for cmd_vel command"""
-        self.spot_wrapper.velocity_cmd(data.linear.x, data.linear.y, data.angular.z)
+        self.spot_wrapper.velocity_cmd(data.linear.x, data.linear.y, data.angular.z, data.linear.z)
+
+    def ikCallback(self, data):
+        """Callback for inv_kinematics command"""
+        self.spot_wrapper.move_robot_using_ik(data)
 
     def bodyPoseCallback(self, data):
         """Callback for cmd_vel command"""
@@ -430,6 +437,11 @@ class SpotROS():
         mobility_params.body_control.CopyFrom(body_control)
         self.spot_wrapper.set_mobility_params(mobility_params)
 
+    def armMoveOnce(self, data):
+        actual_data = data.data # get the array containing the joint angles
+        self.spot_wrapper.arm_move_once_cmd(actual_data) # call function to send the joint positions to spot
+
+
     def armPoseStampedCallback(self, data):
         pos_x = data.pose.position.x
         pos_y = data.pose.position.y
@@ -439,10 +451,7 @@ class SpotROS():
         quat_y = data.pose.orientation.y 
         quat_z = data.pose.orientation.z 
         quat_w = data.pose.orientation.w 
-        import pdb
-        pdb.set_trace()
-        feedback = self.spot_wrapper.arm_pose_cmd(pos_x,pos_y,pos_z,quat_x,quat_y,quat_z,quat_w,seconds=0.1)
-        print(feedback)
+        feedback = self.spot_wrapper.arm_pose_cmd(pos_x,pos_y,pos_z,quat_x,quat_y,quat_z,quat_w,seconds=-1.1)
 
     def armPoseCallback(self, data):
         pos_x = data.position.x
@@ -470,6 +479,11 @@ class SpotROS():
 
     def setGripperCallback(self, data):
         self.spot_wrapper.set_gripper(data.linear.x)
+
+    def getIntrinsics(self, data):
+        intrinsics = self.spot_wrapper.get_intrinsics()
+        message = Float32MultiArray(data=intrinsics)
+        self.intrinsics_pub.publish(message)
 
     def handle_list_graph(self, upload_path):
         """ROS service handler for listing graph_nav waypoint_ids"""
@@ -608,6 +622,9 @@ class SpotROS():
             self.left_depth_info_pub = rospy.Publisher('depth/left/camera_info', CameraInfo, queue_size=10)
             self.right_depth_info_pub = rospy.Publisher('depth/right/camera_info', CameraInfo, queue_size=10)
 
+            # Intrinsics
+            self.intrinsics_pub = rospy.Publisher('intrinsics', Float32MultiArray, queue_size=10)
+
             # Status Publishers #
             self.joint_state_pub = rospy.Publisher('joint_states', JointState, queue_size=10)
             """Defining a TF publisher manually because of conflicts between Python3 and tf"""
@@ -621,6 +638,8 @@ class SpotROS():
             self.wifi_pub = rospy.Publisher('status/wifi', WiFiState, queue_size=10)
             self.power_pub = rospy.Publisher('status/power_state', PowerState, queue_size=10)
             self.battery_pub = rospy.Publisher('status/battery_states', BatteryStateArray, queue_size=10)
+            # batterypercentage publisher
+            self.battery_percentage_pub = rospy.Publisher('status/battery_percentage_states', Float64, queue_size = 10)
             self.behavior_faults_pub = rospy.Publisher('status/behavior_faults', BehaviorFaultState, queue_size=10)
             self.system_faults_pub = rospy.Publisher('status/system_faults', SystemFaultState, queue_size=10)
 
@@ -630,16 +649,26 @@ class SpotROS():
 
             rospy.Subscriber('cmd_vel', Twist, self.cmdVelCallback, queue_size = 1)
             rospy.Subscriber('body_pose', Pose, self.bodyPoseCallback, queue_size = 1)
+            rospy.Subscriber('inv_kinematics', Twist, self.ikCallback, queue_size = 1)
+            
 
+            #Trajectory Publishers #
+
+           # self.arm_pub = rospy.Publisher('planned_trajectory', St, queue_size=10) 
             #Topics for controlling spot arm
             rospy.Subscriber('arm_pose', Pose, self.armPoseCallback, queue_size = 1)
             rospy.Subscriber('arm_pose_stamped', PoseStamped, self.armPoseStampedCallback, queue_size = 1)
+            # Commented out for testing
             rospy.Subscriber('arm_move', Twist, self.armMoveCallback, queue_size = 1)
             rospy.Subscriber('arm_stow', Bool, self.armStowCallback, queue_size = 1)
             rospy.Subscriber('arm_unstow', Twist, self.armUnstowCallback, queue_size = 1)
             rospy.Subscriber('kill_motor', Bool, self.killMotorCallback, queue_size = 1)
             rospy.Subscriber('set_gripper', Twist, self.setGripperCallback, queue_size = 1)
+            rospy.Subscriber('arm_move_once', Float64MultiArray, self.armMoveOnce, queue_size = 1) 
             #rospy.Subscriber('depth/back/image', Image, self.depthSubscriber, queue_size = 1)
+
+            # Intrinsics
+            rospy.Subscriber('get_intrinsics', Bool, self.getIntrinsics, queue_size = 1) 
 
             rospy.Service("claim", Trigger, self.handle_claim)
             rospy.Service("release", Trigger, self.handle_release)
@@ -685,7 +714,7 @@ class SpotROS():
                 if self.auto_power_on:
                     self.spot_wrapper.power_on()
                     if self.auto_stand:
-                        pass # Turned off autostand 
+                        #pass # Turned off autostand 
                         self.spot_wrapper.stand()
                         
 
