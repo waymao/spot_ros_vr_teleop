@@ -86,7 +86,7 @@ class SpotROS():
                 odom_msg = GetOdomFromState(state, self.spot_wrapper, use_vision=True)
             else:
                 odom_msg = GetOdomFromState(state, self.spot_wrapper, use_vision=False)
-            self.odom_pub.publish(odom_msg)
+            self.odom_pub.publish(odom_msg)        
 
             # Feet #
             foot_array_msg = GetFeetFromState(state, self.spot_wrapper)
@@ -451,7 +451,7 @@ class SpotROS():
         quat_y = data.pose.orientation.y 
         quat_z = data.pose.orientation.z 
         quat_w = data.pose.orientation.w 
-        feedback = self.spot_wrapper.arm_pose_cmd(pos_x,pos_y,pos_z,quat_x,quat_y,quat_z,quat_w,seconds=-1.1)
+        feedback = self.spot_wrapper.arm_pose_cmd(pos_x,pos_y,pos_z,quat_x,quat_y,quat_z,quat_w,seconds=-1)
 
     def armPoseCallback(self, data):
         pos_x = data.position.x
@@ -476,6 +476,7 @@ class SpotROS():
 
     def killMotorCallback(self, data):
         self.handle_estop_hard(True)
+        # rostopic pub -r 10 /spot/kill_motor std_msgs/Bool -- 'True'
 
     def setGripperCallback(self, data):
         self.spot_wrapper.set_gripper(data.linear.x)
@@ -715,8 +716,7 @@ class SpotROS():
                     self.spot_wrapper.power_on()
                     if self.auto_stand:
                         #pass # Turned off autostand 
-                        self.spot_wrapper.stand()
-                        
+                        self.spot_wrapper.stand()                        
 
             while not rospy.is_shutdown():
                 self.spot_wrapper.updateTasks()

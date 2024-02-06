@@ -32,7 +32,7 @@ from geometry_msgs.msg import Pose, Point, Quaternion
 from . import graph_nav_util
 
 import bosdyn.api.robot_state_pb2 as robot_state_proto
-from bosdyn.api import basic_command_pb2, arm_command_pb2, manipulation_api_pb2, robot_command_pb2, mobility_command_pb2
+from bosdyn.api import basic_command_pb2, arm_command_pb2, manipulation_api_pb2, robot_command_pb2, synchronized_command_pb2, mobility_command_pb2
 from google.protobuf.timestamp_pb2 import Timestamp
 
 ########
@@ -653,8 +653,9 @@ class SpotWrapper():
         cmd_id = self._robot_command(command) # make command to spot to move the joints 
        # print(self._robot_state_client.get_robot_state()) # for debugging; get the current robot state and print out the current joint angles
 
-    def arm_pose_cmd(self, x, y, z, qx, qy, qz, qw, seconds=10):
+    def arm_pose_cmd(self, x, y, z, qx, qy, qz, qw, seconds=5):
         print(x)
+        start = time.time()
         # Make the arm pose RobotCommand
         # Build a position to move the arm to (in meters, relative to and expressed in the gravity aligned body frame).
         hand_ewrt_flat_body = geometry_pb2.Vec3(x=x, y=y, z=z)
@@ -686,7 +687,7 @@ class SpotWrapper():
         if pos_diff_norm < threshold:
             # for small movements, increase duration of action - decreasing velocity?
             print("smol: ", pos_diff_norm)
-            return
+            #return
 
         # duration in seconds is stored in seconds
         # arm_command = RobotCommandBuilder.arm_pose_command(
@@ -709,16 +710,28 @@ class SpotWrapper():
         #return gaze_command_id
         # Make the open gripper RobotCommand
         gripper_command = RobotCommandBuilder.claw_gripper_open_fraction_command((robot_state.manipulator_state.gripper_open_percentage)/100.0)
-
-        # Combine the arm and gripper commands into one RobotCommand
         command = RobotCommandBuilder.build_synchro_command(gripper_command, arm_command)
 
         # Send the request
         _, _, cmd_id = self._robot_command(arm_command)
-        time.sleep(5)
+        # cmd_id = self._robot_command(arm_command)
+        
+        print("Send follow command")
+        success = block_until_arm_arrives(self._robot_command_client, cmd_id, 6.0)
+        print(f"success: {success}")
+
+        # if success == False:
+        #     print("Move body")
+        #     follow_arm_command = RobotCommandBuilder.follow_arm_command()
+        #     command = RobotCommandBuilder.build_synchro_command(follow_arm_command, arm_command)
+        #     _, _, cmd_id = self._robot_command(follow_arm_command)
+
+        #time.sleep(0.1)
         #return self._robot_command_client._get_robot_command_feedback_request(cmd_id)#WRITTEN BY THE UNDERGRADS (6/15/23 2pm)
         return self._robot_command_client.robot_command_feedback(cmd_id) # Are added this so we can access trajectory plan from feedback response
-        # return cmd_id # Are added this so we can access trajectory plan from feedback response
+        # return cmd_id # Are added this so we can access trajectory plan from feSedback response
+
+        #  rostopic pub -r 10 /arm_pose_stamped geometry_msgs/PoseStamped '{header: {stamp: now, frame_id: "map"}, pose: {position: {x: 1.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}'
 
 
     def set_gripper(self, gripper_value):
@@ -924,6 +937,22 @@ class SpotWrapper():
 
         # response = self._robot_command(base_velocity_command, end_time_secs=end_time, timesync_endpoint=self._robot.time_sync.endpoint)
 
+        # arm_velocity_command = arm_command_pb2.ArmCommand.Request(
+        #     cylindrical_velocity=cylindrical_velocity,
+        #     end_time=self._robot.time_sync.robot_timestamp_from_local_secs(end_time))
+
+
+
+        # command = robot_command_pb2.RobotCommand()
+        # command.synchronized_command.mobility_command.se2_velocity_request.velocity.linear.x = v_x
+        # command.synchronized_command.mobility_command.se2_velocity_request.velocity.linear.y = v_y
+        # command.synchronized_command.mobility_command.se2_velocity_request.velocity.angular = v_rot
+        # command.synchronized_command.mobility_command.se2_velocity_request.se2_frame_name = ODOM_FRAME_NAME
+
+        # response = self._robot_command(command, end_time_secs=end_time, timesync_endpoint=self._robot.time_sync.endpoint)
+
+        # command = synchro_velocity_command_stub(v_x=v_x, v_y=v_y, v_rot=v_rot, params=self._mobility_params)
+        # response = self._robot_command(command)
         #### End Calvin
 
         response = self._robot_command(RobotCommandBuilder.synchro_velocity_command(
