@@ -86,6 +86,17 @@ class SpotROS():
                 odom_msg = GetOdomFromState(state, self.spot_wrapper, use_vision=True)
             else:
                 odom_msg = GetOdomFromState(state, self.spot_wrapper, use_vision=False)
+            
+            graph_state = self.spot_wrapper._graph_nav_client.get_localization_state()
+            odom_tform_body = get_vision_tform_body(graph_state.robot_kinematics.transforms_snapshot)
+
+            odom_msg.pose.pose.position.x = odom_tform_body.x
+            odom_msg.pose.pose.position.y = odom_tform_body.y
+            odom_msg.pose.pose.position.z = odom_tform_body.z
+            odom_msg.pose.pose.orientation.w = odom_tform_body.rot.w
+            odom_msg.pose.pose.orientation.x = odom_tform_body.rot.x
+            odom_msg.pose.pose.orientation.y = odom_tform_body.rot.y
+            odom_msg.pose.pose.orientation.z = odom_tform_body.rot.z
             self.odom_pub.publish(odom_msg)        
 
             # Feet #
@@ -453,6 +464,17 @@ class SpotROS():
         quat_w = data.pose.orientation.w 
         feedback = self.spot_wrapper.arm_pose_cmd(pos_x,pos_y,pos_z,quat_x,quat_y,quat_z,quat_w,seconds=-1)
 
+    def joystickCallback(self, data):
+        pos_x = data.pose.position.x
+        pos_y = data.pose.position.y
+        pos_z = data.pose.position.z
+
+        quat_x = data.pose.orientation.x
+        quat_y = data.pose.orientation.y 
+        quat_z = data.pose.orientation.z 
+        quat_w = data.pose.orientation.w 
+        self.spot_wrapper.arm_move_command(pos_x, pos_y, pos_z, quat_x, quat_y, quat_z, quat_w)
+
     def armPoseCallback(self, data):
         pos_x = data.position.x
         pos_y = data.position.y
@@ -464,6 +486,8 @@ class SpotROS():
         quat_w = data.orientation.w 
 
         self.spot_wrapper.arm_pose_cmd(pos_x,pos_y,pos_z,quat_x,quat_y,quat_z,quat_w)
+
+    
 
     def armMoveCallback(self, data):
         self.spot_wrapper.arm_move_command(data.linear.x, data.linear.y, data.linear.z, data.angular.x, data.angular.y, data.angular.z, 0)
@@ -661,6 +685,8 @@ class SpotROS():
             rospy.Subscriber('arm_pose_stamped', PoseStamped, self.armPoseStampedCallback, queue_size = 1)
             # Commented out for testing
             rospy.Subscriber('arm_move', Twist, self.armMoveCallback, queue_size = 1)
+            #joystick
+            rospy.Subscriber('joystick_arm_pose_stamped', PoseStamped, self.joystickCallback, queue_size = 1)
             rospy.Subscriber('arm_stow', Bool, self.armStowCallback, queue_size = 1)
             rospy.Subscriber('arm_unstow', Twist, self.armUnstowCallback, queue_size = 1)
             rospy.Subscriber('kill_motor', Bool, self.killMotorCallback, queue_size = 1)
@@ -715,8 +741,8 @@ class SpotROS():
                 if self.auto_power_on:
                     self.spot_wrapper.power_on()
                     if self.auto_stand:
-                        #pass # Turned off autostand 
-                        self.spot_wrapper.stand()                        
+                        pass # Turned off autostand 
+                        #self.spot_wrapper.stand()                        
 
             while not rospy.is_shutdown():
                 self.spot_wrapper.updateTasks()

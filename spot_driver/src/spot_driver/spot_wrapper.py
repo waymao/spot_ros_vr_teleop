@@ -654,7 +654,6 @@ class SpotWrapper():
        # print(self._robot_state_client.get_robot_state()) # for debugging; get the current robot state and print out the current joint angles
 
     def arm_pose_cmd(self, x, y, z, qx, qy, qz, qw, seconds=5):
-        print(x)
         start = time.time()
         # Make the arm pose RobotCommand
         # Build a position to move the arm to (in meters, relative to and expressed in the gravity aligned body frame).
@@ -675,7 +674,6 @@ class SpotWrapper():
 
         #dhand is desired hand pose
         odom_T_dhand = odom_T_flat_body * math_helpers.SE3Pose.from_obj(flat_body_T_hand)
-
 
         hand_pose_np = np.array([odom_T_hand.position.x, odom_T_hand.position.y, odom_T_hand.position.z])
         dhand_pose_np = np.array([odom_T_dhand.position.x, odom_T_dhand.position.y, odom_T_dhand.position.z])
@@ -755,7 +753,7 @@ class SpotWrapper():
         # rostopic pub -r 10 /spot/set_gripper geometry_msgs/Twist -- '[100.0, 0.0, 0.0]' '[0.0, 0.0, 0.0]'
     
 
-    def arm_move_command(self, dx, dy, dz, dqx, dqy, dqz, dqw, cmd_duration=0.1):
+    def arm_move_command(self, dx, dy, dz, dqx, dqy, dqz, dqw, cmd_duration=0.02):
 
         # get the current pose information
         robot_state = self._robot_state_client.get_robot_state()
@@ -776,8 +774,12 @@ class SpotWrapper():
         qz = grav_aligned_body_T_hand.rot.z + dqz
         qw = grav_aligned_body_T_hand.rot.w + dqw
 
+        #joystick
+        norm = np.sqrt(qx**2 + qy**2 + qz**2 + qw**2)
+        qx, qy, qz, qw = qx / norm, qy / norm, qz / norm, qw / norm
+
         # call arm_pose_command
-        self.arm_pose_cmd(x, y, z, qx, qy, qz, qw, seconds=0.1)
+        self.arm_pose_cmd(x, y, z, qx, qy, qz, qw, seconds=cmd_duration)
         self._last_arm_command_time = end_time
 
         # Move forward
