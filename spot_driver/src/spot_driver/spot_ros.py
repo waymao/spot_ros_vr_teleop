@@ -473,7 +473,8 @@ class SpotROS():
         quat_y = data.pose.orientation.y 
         quat_z = data.pose.orientation.z 
         quat_w = data.pose.orientation.w 
-        self.spot_wrapper.arm_move_command(pos_x, pos_y, pos_z, quat_x, quat_y, quat_z, quat_w)
+
+        self.spot_wrapper.velocity_arm_move_command(v_r=pos_x, v_theta=pos_y, v_z=pos_z, v_rx=quat_x, v_ry=quat_y, v_rz=quat_z)
 
     def armPoseCallback(self, data):
         pos_x = data.position.x
@@ -741,8 +742,8 @@ class SpotROS():
                 if self.auto_power_on:
                     self.spot_wrapper.power_on()
                     if self.auto_stand:
-                        pass # Turned off autostand 
-                        #self.spot_wrapper.stand()                        
+                        #pass # Turned off autostand 
+                        self.spot_wrapper.stand()                        
 
             while not rospy.is_shutdown():
                 self.spot_wrapper.updateTasks()

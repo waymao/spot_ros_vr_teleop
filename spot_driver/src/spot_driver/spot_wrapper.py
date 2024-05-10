@@ -753,7 +753,7 @@ class SpotWrapper():
         # rostopic pub -r 10 /spot/set_gripper geometry_msgs/Twist -- '[100.0, 0.0, 0.0]' '[0.0, 0.0, 0.0]'
     
 
-    def arm_move_command(self, dx, dy, dz, dqx, dqy, dqz, dqw, cmd_duration=0.02):
+    def arm_move_command(self, dx, dy, dz, dqx, dqy, dqz, dqw, cmd_duration=0.1):
 
         # get the current pose information
         robot_state = self._robot_state_client.get_robot_state()
@@ -796,6 +796,44 @@ class SpotWrapper():
 
         # Move arm up
         # rostopic pub -r 100 /spot/arm_move geometry_msgs/Twist -- '[0.0, 0.3, 0.0]' '[0.0, 0.0, 0.0]'
+
+
+    def velocity_arm_move_command(self, v_r=0.0, v_theta=0.0, v_z=0.0, v_rx=0.0, v_ry=0.0, v_rz=0.0, cmd_duration=0.1):
+
+        # cylindrical_velocity
+        # v_r: normalized velocity in R-axis to move hand towards/away from shoulder in range [-1.0,1.0]
+        # v_theta: normalized velocity in theta-axis to rotate hand clockwise/counter-clockwise around the shoulder in range [-1.0,1.0]
+        # v_z: normalized velocity in Z-axis to raise/lower the hand in range [-1.0,1.0]
+
+        # v_rx: angular velocity about X-axis in units rad/sec
+        # v_ry: angular velocity about Y-axis in units rad/sec
+        # v_rz: angular velocity about Z-axis in units rad/sec
+
+        
+        # Build the linear velocity command specified in a cylindrical coordinate system
+        cylindrical_velocity = arm_command_pb2.ArmVelocityCommand.CylindricalVelocity()
+        cylindrical_velocity.linear_velocity.r = v_r
+        cylindrical_velocity.linear_velocity.theta = v_theta
+        cylindrical_velocity.linear_velocity.z = v_z 
+
+        # angular velocity for gripper
+        # Build the angular velocity command of the hand
+        angular_velocity_of_hand_rt_odom_in_hand = geometry_pb2.Vec3(x=v_rx, y=v_ry, z=v_rz)
+
+        end_time=time.time() + cmd_duration
+        arm_velocity_command = arm_command_pb2.ArmVelocityCommand.Request(
+            cylindrical_velocity=cylindrical_velocity,
+            angular_velocity_of_hand_rt_odom_in_hand=angular_velocity_of_hand_rt_odom_in_hand,
+            end_time=self._robot.time_sync.robot_timestamp_from_local_secs(end_time))
+
+        robot_command = robot_command_pb2.RobotCommand()
+        robot_command.synchronized_command.arm_command.arm_velocity_command.CopyFrom(
+            arm_velocity_command)
+
+        # send command
+        self._robot_command(robot_command, end_time_secs=end_time)
+
+                                                                           
 
     def get_intrinsics(self):
         image_sources = self._image_client.list_image_sources()
