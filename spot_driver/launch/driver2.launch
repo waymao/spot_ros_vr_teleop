@@ -5,24 +5,23 @@
   <arg name="estop_timeout" default="9.0"/>
 
   <!-- spot special node -->
-  <arg name="spot_node" default="spot" />
+  <arg name="spot_node" default="spot_ros2" />
 
   <!-- claiming control -->
-  <arg name="auto_claim" default="true"/>
-  <arg name="auto_power_on" default="true"/>
-  <arg name="auto_stand" default="true"/>
+  <arg name="auto_claim" default="false"/>
+  <arg name="auto_power_on" default="false"/>
+  <arg name="auto_stand" default="false"/>
   <arg name="take_lease" default="false"/>
 
   <!-- Valid values: front, side, rear -->
   <arg name="cameras_used" default="[]" />
 
-  <include file="$(find spot_description)/launch/description.launch">
-    <arg name="spot_node" value="$(arg spot_node)"/>
-  </include>
-  <include file="$(find spot_driver)/launch/control.launch" />
+  <include file="$(find spot_description)/launch/description2.launch" />
+  <include file="$(find spot_driver)/launch/control2.launch" />
   <include file="$(find spot_driver)/launch/accessories.launch" />
 
-  <node pkg="spot_driver" type="spot_ros" name="spot_ros"  ns="$(arg spot_node)" output="screen">
+  <!-- Update the node name to be unique -->
+  <node pkg="spot_driver" type="spot_ros" name="spot_ros2" ns="spot2" output="screen">
     <rosparam file="$(find spot_driver)/config/spot_ros.yaml" command="load" />
     <param name="spot_node" value="$(arg spot_node)" />
     <param name="username" value="$(arg username)" />
@@ -35,16 +34,14 @@
     <param name="auto_stand"    value="$(arg auto_stand)"/>
     <param name="take_lease"    value="$(arg take_lease)"/>
     <param name="mode_parent_odom_tf" value="vision" />
-    <param name="username" value="$(arg username)" />
-    <param name="password" value="$(arg password)" />
-    <param name="hostname" value="$(arg hostname)" />
-    <remap from="joint_states" to="/joint_states"/>
-    <remap from="tf" to="/tf"/>
+    <remap from="joint_states" to="/spot2/joint_states"/>
+    <remap from="tf" to="/spot2/tf"/>
   </node>
 
-  <node pkg="twist_mux" type="twist_mux" name="twist_mux" >
+
+  <node pkg="twist_mux" type="twist_mux" name="twist_mux2" >
     <rosparam command="load" file="$(find spot_driver)/config/twist_mux.yaml" />
-    <remap from="cmd_vel_out" to="spot/cmd_vel"/>
+    <remap from="cmd_vel_out" to="spot2/cmd_vel"/>
   </node>
 
 </launch>

@@ -70,11 +70,18 @@ class SpotROS():
         if state:
             ## joint states ##
             joint_state = GetJointStatesFromState(state, self.spot_wrapper)
+            if self.spot_node != "":
+                for i, name in enumerate(joint_state.name):
+                    joint_state.name[i] = self.spot_node + "/" + name
             self.joint_state_pub.publish(joint_state)
 
             ## TF ##
             tf_msg = GetTFFromState(state, self.spot_wrapper, self.mode_parent_odom_tf)
             if len(tf_msg.transforms) > 0:
+                if self.spot_node != "":
+                    for transform in tf_msg.transforms:
+                        transform.header.frame_id = self.spot_node + "/" + transform.header.frame_id
+                        transform.child_frame_id = self.spot_node + "/" + transform.child_frame_id
                 self.tf_pub.publish(tf_msg)
 
             # Odom Twist #
@@ -582,7 +589,8 @@ class SpotROS():
 
     def main(self):
         """Main function for the SpotROS class.  Gets config from ROS and initializes the wrapper.  Holds lease from wrapper and updates all async tasks at the ROS rate"""
-        rospy.init_node('spot_ros', anonymous=True)
+        rospy.init_node("spot_ros", anonymous=True)
+        self.spot_node = rospy.get_param('~spot_node', "")
         rate = rospy.Rate(50)
 
         self.rates = rospy.get_param('~rates', {})
@@ -742,8 +750,10 @@ class SpotROS():
                 if self.auto_power_on:
                     self.spot_wrapper.power_on()
                     if self.auto_stand:
-                        #pass # Turned off autostand 
-                        self.spot_wrapper.stand()                        
+                        pass # Turned off autostand 
+                        self.spot_wrapper.stand()
+                        rospy.loginfo("Spot standing")
+                rospy.loginfo("Lease claimed")
 
             while not rospy.is_shutdown():
                 self.spot_wrapper.updateTasks()
