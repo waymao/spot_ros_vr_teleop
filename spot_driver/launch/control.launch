@@ -2,8 +2,9 @@
   <arg name="joy"        default="true" />
   <arg name="joy_dev"    default="$(optenv SPOT_JOY_DEVICE /dev/input/js0)" />
   <arg name="joy_config" default="$(eval optenv('SPOT_JOY_CONFIG', find('spot_driver') + '/config/teleop.yaml'))" />
+  <arg name="ns"         default="spot"/>
 
-  <node pkg="interactive_marker_twist_server" type="marker_server" name="twist_marker_server" >
+  <node pkg="interactive_marker_twist_server" type="marker_server" ns="$(arg ns)" name="twist_marker_server" >
     <rosparam command="load" file="$(find spot_driver)/config/planar.yaml" />
     <param name="link_name" value="body" />
     <param name="robot_name" value="spot" />
@@ -14,8 +15,8 @@
 
     <group ns="bluetooth_teleop">
       <param name="joy_node/dev" value="$(arg joy_dev)" />
-      <node pkg="joy" type="joy_node" name="joy_node" />
-      <node pkg="teleop_twist_joy" type="teleop_node" name="teleop_twist_joy"/>
+      <node ns="$(arg ns)" pkg="joy" type="joy_node" name="joy_node" />
+      <node ns="$(arg ns)" pkg="teleop_twist_joy" type="teleop_node" name="teleop_twist_joy"/>
     </group>
   </group>
 </launch>

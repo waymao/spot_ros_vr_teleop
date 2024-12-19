@@ -13,6 +13,8 @@ from bosdyn.api.spot import robot_command_pb2 as spot_command_pb2
 from bosdyn.api import geometry_pb2, trajectory_pb2
 from bosdyn.api.geometry_pb2 import Quaternion, SE2VelocityLimit
 from bosdyn.client import math_helpers
+from bosdyn.api.graph_nav import graph_nav_pb2, map_pb2, nav_pb2
+from bosdyn.client.graph_nav import GraphNavClient
 import actionlib
 import functools
 import bosdyn.geometry
@@ -59,6 +61,64 @@ class SpotROS():
         self.callbacks["rear_image"] = self.RearImageCB
         #self.callbacks["hand_image"] = self.HandImageCB
 
+    
+
+    def _upload_graph_and_snapshots(self, *args):
+        """Upload the graph and snapshots to the robot."""
+        print("Loading the graph from disk into local storage...")
+        with open(self._upload_filepath + "/graph", "rb") as graph_file:
+            # Load the graph from disk.
+            data = graph_file.read()
+            self._current_graph = map_pb2.Graph()
+            self._current_graph.ParseFromString(data)
+            print("Loaded graph has {} waypoints and {} edges".format(
+                len(self._current_graph.waypoints), len(self._current_graph.edges)))
+        self._current_waypoint_snapshots = {}
+        self._current_edge_snapshots = {}
+        for waypoint in self._current_graph.waypoints:
+             # Load the waypoint snapshots from disk.
+            with open(self._upload_filepath + "/waypoint_snapshots/{}".format(waypoint.snapshot_id),
+                      "rb") as snapshot_file:
+                waypoint_snapshot = map_pb2.WaypointSnapshot()
+                waypoint_snapshot.ParseFromString(snapshot_file.read())
+                self._current_waypoint_snapshots[waypoint_snapshot.id] = waypoint_snapshot
+        for edge in self._current_graph.edges:
+            if len(edge.snapshot_id) == 0:
+                continue
+            # Load the edge snapshots from disk.
+            with open(self._upload_filepath + "/edge_snapshots/{}".format(edge.snapshot_id),
+                      "rb") as snapshot_file:
+                edge_snapshot = map_pb2.EdgeSnapshot()
+                edge_snapshot.ParseFromString(snapshot_file.read())
+                self._current_edge_snapshots[edge_snapshot.id] = edge_snapshot
+        # Upload the graph to the robot.
+        print("Uploading the graph and snapshots to the robot...")
+        true_if_empty = not len(self._current_graph.anchoring.anchors)
+        response = self.spot_wrapper._graph_nav_client.upload_graph(graph=self._current_graph,
+                                                       generate_new_anchoring=true_if_empty)
+        # Upload the snapshots to the robot.
+        for snapshot_id in response.unknown_waypoint_snapshot_ids:
+            waypoint_snapshot = self._current_waypoint_snapshots[snapshot_id]
+            self.spot_wrapper._graph_nav_client.upload_waypoint_snapshot(waypoint_snapshot)
+            print("Uploaded {}".format(waypoint_snapshot.id))
+        for snapshot_id in response.unknown_edge_snapshot_ids:
+            edge_snapshot = self._current_edge_snapshots[snapshot_id]
+            self.spot_wrapper._graph_nav_client.upload_edge_snapshot(edge_snapshot)
+            print("Uploaded {}".format(edge_snapshot.id))
+
+        # The upload is complete! Check that the robot is localized to the graph,
+        # and if it is not, prompt the user to localize the robot before attempting
+        # any navigation commands.
+        localization_state = self.spot_wrapper._graph_nav_client.get_localization_state()
+        gn_origin_tform_body = localization_state.localization.seed_tform_body
+        print("gn_origin_tform_body: ", str(gn_origin_tform_body))
+        if not localization_state.localization.waypoint_id:
+            # The robot is not localized to the newly uploaded graph.
+            print("\n")
+            print("Upload complete! The robot is currently not localized to the map; please localize", \
+                   "the robot using commands (2) or (3) before attempting a navigation command.")
+
+
     def RobotStateCB(self, results):
         """Callback for when the Spot Wrapper gets new robot state data.
 
@@ -76,12 +136,35 @@ class SpotROS():
             self.joint_state_pub.publish(joint_state)
 
             ## TF ##
-            tf_msg = GetTFFromState(state, self.spot_wrapper, self.mode_parent_odom_tf)
+            tf_msg = GetTFFromState(state, self.spot_wrapper, None)
             if len(tf_msg.transforms) > 0:
                 if self.spot_node != "":
                     for transform in tf_msg.transforms:
                         transform.header.frame_id = self.spot_node + "/" + transform.header.frame_id
                         transform.child_frame_id = self.spot_node + "/" + transform.child_frame_id
+                
+                # add new tf
+                local_time = self.spot_wrapper.robotToLocalTime(state.kinematic_state.acquisition_timestamp)
+                try:
+                    localization_state = self.spot_wrapper._graph_nav_client.get_localization_state()
+                    seed_tf_body = localization_state.localization.seed_tform_body
+                    seed_tf_body_pose = math_helpers.SE3Pose.from_proto(seed_tf_body)
+                    new_tf = TransformStamped()
+                    new_tf.header.stamp = rospy.Time(local_time.seconds, local_time.nanos)
+                    new_tf.header.frame_id = "gpe"
+                    new_tf.child_frame_id = self.spot_node + "/" + "body"
+                    new_tf.transform.translation.x = seed_tf_body_pose.x #position.x
+                    new_tf.transform.translation.y = seed_tf_body_pose.y
+                    new_tf.transform.translation.z = seed_tf_body_pose.z
+                    new_tf.transform.rotation.x = seed_tf_body_pose.rotation.x
+                    new_tf.transform.rotation.y = seed_tf_body_pose.rotation.y
+                    new_tf.transform.rotation.z = seed_tf_body_pose.rotation.z
+                    new_tf.transform.rotation.w = seed_tf_body_pose.rotation.w
+                    tf_msg.transforms.append(new_tf)
+                except Exception as e:
+                    print("unable to get localization state")
+                    print(e)
+                
                 self.tf_pub.publish(tf_msg)
 
             # Odom Twist #
@@ -599,6 +682,7 @@ class SpotROS():
         self.hostname = rospy.get_param('~hostname', 'default_value')
         self.motion_deadzone = rospy.get_param('~deadzone', 0.05)
         self.estop_timeout = rospy.get_param('~estop_timeout', 9.0)
+        self._upload_filepath = rospy.get_param('~map_path', None)
 
         self.camera_static_transform_broadcaster = tf2_ros.StaticTransformBroadcaster()
         # Static transform broadcaster is super simple and just a latched publisher. Every time we add a new static
@@ -754,6 +838,13 @@ class SpotROS():
                         self.spot_wrapper.stand()
                         rospy.loginfo("Spot standing")
                 rospy.loginfo("Lease claimed")
+            
+            if self._upload_filepath is not None:
+                self._upload_graph_and_snapshots()
+                self.spot_wrapper._set_initial_localization_fiducial()
+                self.spot_wrapper._get_localization_state()
+                # self.spot_wrapper._list_graph_waypoint_and_edge_ids()
+
 
             while not rospy.is_shutdown():
                 self.spot_wrapper.updateTasks()

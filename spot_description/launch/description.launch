@@ -1,6 +1,7 @@
 <launch>
   <arg name="spot_node" default=""/>
-  <param name="robot_description" command="$(find xacro)/xacro $(find spot_description)/urdf/spot_single.urdf.xacro" />
+  <!-- <param name="robot_description" command="$(find xacro)/xacro $(find spot_description)/urdf/spot_single.urdf.xacro prefix:=$(arg spot_node)" /> -->
+  <param name="robot_description" command="$(find xacro)/xacro $(find spot_description)/urdf/two_spot.urdf.xacro" />
 
   <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher">
   </node>

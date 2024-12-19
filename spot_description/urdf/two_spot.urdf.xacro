@@ -3,4 +3,17 @@
     <xacro:include filename="$(find spot_description)/urdf/spot_macro.urdf.xacro" />
     <xacro:robot_body prefix="spot/"/>
     <xacro:robot_body prefix="spot2/"/>
+    <link name="gpe">
+        <origin xyz="0 0 0"/>
+    </link>
+    <joint name="spot/bodyj" type="fixed">
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <parent link="gpe" />
+        <child link="spot/body" />
+    </joint>
+    <joint name="spot2/bodyj" type="fixed">
+        <origin xyz="0 1 0" rpy="0 0 0" />
+        <parent link="gpe" />
+        <child link="spot2/body" />
+    </joint>
 </robot>

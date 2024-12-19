@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+
+import rospy
+import tf2_ros
+import tf2_geometry_msgs
+from geometry_msgs.msg import TransformStamped
+
+
+class MultiSpotTransformPublisher:
+    def __init__(self, source_frame="spot2/body", target_frame="spot/body"):
+        self.pub = rospy.Publisher('spot_tf_compute', TransformStamped, queue_size=10)
+        self.tf_buffer = tf2_ros.Buffer()
+        self.listener = tf2_ros.TransformListener(self.tf_buffer)
+        self.rate = rospy.Rate(10.0)
+        self.source_frame = source_frame
+        self.target_frame = target_frame
+    
+    def run(self):
+        while not rospy.is_shutdown():
+            try:
+                # Look up the transform from source_frame to target_frame
+                transform: TransformStamped = self.tf_buffer.lookup_transform(
+                    self.target_frame, self.source_frame, rospy.Time(0), rospy.Duration(1.0)
+                )
+
+                # Print the transform
+                # rospy.loginfo("Transform from %s to %s:\nTranslation: %s\nRotation: %s",
+                #             self.source_frame, self.target_frame,
+                #             transform.transform.translation,
+                #             transform.transform.rotation)
+                # transform.transform.translation.x /= 2
+                # transform.transform.translation.y -= 1.35
+                # transform.transform.translation.z /= 2
+                self.pub.publish(transform)
+
+            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
+                rospy.logwarn("Could not get transform: %s", e)
+
+            self.rate.sleep()
+
+
+
+if __name__ == "__main__":
+    rospy.init_node('spot_tf_compute')
+    publisher = MultiSpotTransformPublisher()
+    publisher.run()
+
+

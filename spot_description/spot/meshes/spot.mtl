@@ -1,0 +1,27 @@
+newmtl black
+Ka 0.0286 0.0286 0.0286
+Kd 0.0000 0.0000 0.0000
+Ks 0.2980 0.2980 0.2980
+illum 2
+Ns 60.0000
+
+newmtl white
+Ka 0.9 0.9 0.9
+Kd 0.9 0.9 0.9
+Ks 0.9 0.9 0.9
+illum 2
+Ns 60.0000
+
+newmtl grey
+Ka 0.3 0.3 0.3
+Kd 0.3 0.3 0.3
+Ks 0.3 0.3 0.3
+illum 2
+Ns 60.0000
+
+newmtl contact
+Ka 0.9 0.0 0.0
+Kd 0.9 0.0 0.0
+Ks 0.9 0.0 0.0
+illum 2
+Ns 60.0000

@@ -19,8 +19,8 @@
   <include file="$(find spot_description)/launch/description.launch">
     <arg name="spot_node" value="$(arg spot_node)"/>
   </include>
-  <include file="$(find spot_driver)/launch/control.launch" />
-  <include file="$(find spot_driver)/launch/accessories.launch" />
+  <include file="$(find spot_driver)/launch/control.launch" ns="$(arg spot_node)"/>
+  <include file="$(find spot_driver)/launch/accessories.launch"  ns="$(arg spot_node)"/>
 
   <node pkg="spot_driver" type="spot_ros" name="spot_ros"  ns="$(arg spot_node)" output="screen">
     <rosparam file="$(find spot_driver)/config/spot_ros.yaml" command="load" />
@@ -35,6 +35,7 @@
     <param name="auto_stand"    value="$(arg auto_stand)"/>
     <param name="take_lease"    value="$(arg take_lease)"/>
     <param name="mode_parent_odom_tf" value="vision" />
+    <param name="map_path" value="/home/ericbot/Trajectories/demo/"/>
     <param name="username" value="$(arg username)" />
     <param name="password" value="$(arg password)" />
     <param name="hostname" value="$(arg hostname)" />
