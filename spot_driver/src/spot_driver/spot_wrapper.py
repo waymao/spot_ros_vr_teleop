@@ -685,7 +685,7 @@ class SpotWrapper():
         if pos_diff_norm < threshold:
             # for small movements, increase duration of action - decreasing velocity?
             print("smol: ", pos_diff_norm)
-            #return
+            return
 
         # duration in seconds is stored in seconds
         # arm_command = RobotCommandBuilder.arm_pose_command(
