@@ -656,80 +656,131 @@ class SpotWrapper():
     def arm_pose_cmd(self, x, y, z, qx, qy, qz, qw, seconds=5):
         start = time.time()
         # Make the arm pose RobotCommand
-        # Build a position to move the arm to (in meters, relative to and expressed in the gravity aligned body frame).
-        hand_ewrt_flat_body = geometry_pb2.Vec3(x=x, y=y, z=z)
+        # Build a position to move the arm to (in meters, relative to and expressed in the body frame).
+        hand_ewrt_body = geometry_pb2.Vec3(x=x, y=y, z=z)
 
         # Rotation as a quaternion
-        flat_body_Q_hand = geometry_pb2.Quaternion(w=qw, x=qx, y=qy, z=qz)
+        body_Q_hand = geometry_pb2.Quaternion(w=qw, x=qx, y=qy, z=qz)
 
-        flat_body_T_hand = geometry_pb2.SE3Pose(position=hand_ewrt_flat_body,
-                                                rotation=flat_body_Q_hand)
+        body_T_hand = geometry_pb2.SE3Pose(position=hand_ewrt_body, rotation=body_Q_hand)
 
         robot_state = self._robot_state_client.get_robot_state()
-        odom_T_flat_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
-                                         ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+        
+        # dhand is desired hand pose
+        body_T_hand_current = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+                                            BODY_FRAME_NAME, "hand")
 
-        odom_T_hand = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
-                                         ODOM_FRAME_NAME, "hand")
+        body_T_dhand = math_helpers.SE3Pose.from_obj(body_T_hand)
 
-        #dhand is desired hand pose
-        odom_T_dhand = odom_T_flat_body * math_helpers.SE3Pose.from_obj(flat_body_T_hand)
+        hand_pose_np = np.array([body_T_hand_current.position.x, body_T_hand_current.position.y, 
+                                body_T_hand_current.position.z])
+        dhand_pose_np = np.array([body_T_dhand.position.x, body_T_dhand.position.y, body_T_dhand.position.z])
 
-        hand_pose_np = np.array([odom_T_hand.position.x, odom_T_hand.position.y, odom_T_hand.position.z])
-        dhand_pose_np = np.array([odom_T_dhand.position.x, odom_T_dhand.position.y, odom_T_dhand.position.z])
-
-        pos_diff_norm = np.linalg.norm(hand_pose_np-dhand_pose_np)
+        pos_diff_norm = np.linalg.norm(hand_pose_np - dhand_pose_np)
 
         threshold = 0.01
 
         if pos_diff_norm < threshold:
-            # for small movements, increase duration of action - decreasing velocity?
             print("smol: ", pos_diff_norm)
             return
 
-        # duration in seconds is stored in seconds
-        # arm_command = RobotCommandBuilder.arm_pose_command(
-        #     odom_T_dhand.x, odom_T_dhand.y, odom_T_dhand.z, odom_T_dhand.rot.w, odom_T_dhand.rot.x,
-        #     odom_T_dhand.rot.y, odom_T_dhand.rot.z, ODOM_FRAME_NAME, seconds)
+        # Arm command in BODY frame
         arm_command = RobotCommandBuilder.arm_pose_command(
-            odom_T_dhand.x, odom_T_dhand.y, odom_T_dhand.z, odom_T_dhand.rot.w, odom_T_dhand.rot.x,
-            odom_T_dhand.rot.y, odom_T_dhand.rot.z, ODOM_FRAME_NAME, seconds)
-        #print(f'odom x: {odom_T_dhand.x}')
-        #arm_command = RobotCommandBuilder.arm_gaze_command(
-        #        odom_T_dhand.x, odom_T_dhand.y, odom_T_dhand.z, "trajectory?")
-        
-        #gripper_command = RobotCommandBuilder.claw_gripper_open_command()
-        #synchro_command = RobotCommandBuilder.build_synchro_command(gripper_command, arm_command)
-        
-        #gaze_command_id = self._robot_state_client.robot_command(synchro_command)
+            body_T_dhand.position.x, body_T_dhand.position.y, body_T_dhand.position.z,
+            body_T_dhand.rotation.w, body_T_dhand.rotation.x, body_T_dhand.rotation.y, body_T_dhand.rotation.z,
+            BODY_FRAME_NAME, seconds)
 
-        #block_until_arm_arrives(command_client, gaze_command_id, 5.0)
-        
-        #return gaze_command_id
         # Make the open gripper RobotCommand
-        gripper_command = RobotCommandBuilder.claw_gripper_open_fraction_command((robot_state.manipulator_state.gripper_open_percentage)/100.0)
+        gripper_command = RobotCommandBuilder.claw_gripper_open_fraction_command(
+            (robot_state.manipulator_state.gripper_open_percentage) / 100.0)
         command = RobotCommandBuilder.build_synchro_command(gripper_command, arm_command)
 
         # Send the request
         _, _, cmd_id = self._robot_command(arm_command)
-        # cmd_id = self._robot_command(arm_command)
         
         print("Send follow command")
         success = block_until_arm_arrives(self._robot_command_client, cmd_id, 6.0)
         print(f"success: {success}")
 
-        # if success == False:
-        #     print("Move body")
-        #     follow_arm_command = RobotCommandBuilder.follow_arm_command()
-        #     command = RobotCommandBuilder.build_synchro_command(follow_arm_command, arm_command)
-        #     _, _, cmd_id = self._robot_command(follow_arm_command)
+        return self._robot_command_client.robot_command_feedback(cmd_id)
 
-        #time.sleep(0.1)
-        #return self._robot_command_client._get_robot_command_feedback_request(cmd_id)#WRITTEN BY THE UNDERGRADS (6/15/23 2pm)
-        return self._robot_command_client.robot_command_feedback(cmd_id) # Are added this so we can access trajectory plan from feedback response
-        # return cmd_id # Are added this so we can access trajectory plan from feSedback response
+    # def arm_pose_cmd(self, x, y, z, qx, qy, qz, qw, seconds=5):
+    #     start = time.time()
+    #     # Make the arm pose RobotCommand
+    #     # Build a position to move the arm to (in meters, relative to and expressed in the gravity aligned body frame).
+    #     hand_ewrt_flat_body = geometry_pb2.Vec3(x=x, y=y, z=z)
 
-        #  rostopic pub -r 10 /arm_pose_stamped geometry_msgs/PoseStamped '{header: {stamp: now, frame_id: "map"}, pose: {position: {x: 1.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}'
+    #     # Rotation as a quaternion
+    #     flat_body_Q_hand = geometry_pb2.Quaternion(w=qw, x=qx, y=qy, z=qz)
+
+    #     flat_body_T_hand = geometry_pb2.SE3Pose(position=hand_ewrt_flat_body,
+    #                                             rotation=flat_body_Q_hand)
+
+    #     robot_state = self._robot_state_client.get_robot_state()
+    #     odom_T_flat_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+    #                                      ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+
+    #     odom_T_hand = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+    #                                      ODOM_FRAME_NAME, "hand")
+
+    #     #dhand is desired hand pose
+    #     odom_T_dhand = odom_T_flat_body * math_helpers.SE3Pose.from_obj(flat_body_T_hand)
+
+    #     hand_pose_np = np.array([odom_T_hand.position.x, odom_T_hand.position.y, odom_T_hand.position.z])
+    #     dhand_pose_np = np.array([odom_T_dhand.position.x, odom_T_dhand.position.y, odom_T_dhand.position.z])
+
+    #     pos_diff_norm = np.linalg.norm(hand_pose_np-dhand_pose_np)
+
+    #     threshold = 0.01
+
+    #     if pos_diff_norm < threshold:
+    #         # for small movements, increase duration of action - decreasing velocity?
+    #         print("smol: ", pos_diff_norm)
+    #         return
+
+    #     # duration in seconds is stored in seconds
+    #     # arm_command = RobotCommandBuilder.arm_pose_command(
+    #     #     odom_T_dhand.x, odom_T_dhand.y, odom_T_dhand.z, odom_T_dhand.rot.w, odom_T_dhand.rot.x,
+    #     #     odom_T_dhand.rot.y, odom_T_dhand.rot.z, ODOM_FRAME_NAME, seconds)
+    #     arm_command = RobotCommandBuilder.arm_pose_command(
+    #         odom_T_dhand.x, odom_T_dhand.y, odom_T_dhand.z, odom_T_dhand.rot.w, odom_T_dhand.rot.x,
+    #         odom_T_dhand.rot.y, odom_T_dhand.rot.z, ODOM_FRAME_NAME, seconds)
+    #     #print(f'odom x: {odom_T_dhand.x}')
+    #     #arm_command = RobotCommandBuilder.arm_gaze_command(
+    #     #        odom_T_dhand.x, odom_T_dhand.y, odom_T_dhand.z, "trajectory?")
+        
+    #     #gripper_command = RobotCommandBuilder.claw_gripper_open_command()
+    #     #synchro_command = RobotCommandBuilder.build_synchro_command(gripper_command, arm_command)
+        
+    #     #gaze_command_id = self._robot_state_client.robot_command(synchro_command)
+
+    #     #block_until_arm_arrives(command_client, gaze_command_id, 5.0)
+        
+    #     #return gaze_command_id
+    #     # Make the open gripper RobotCommand
+    #     gripper_command = RobotCommandBuilder.claw_gripper_open_fraction_command((robot_state.manipulator_state.gripper_open_percentage)/100.0)
+    #     command = RobotCommandBuilder.build_synchro_command(gripper_command, arm_command)
+
+    #     # Send the request
+    #     _, _, cmd_id = self._robot_command(arm_command)
+    #     # cmd_id = self._robot_command(arm_command)
+        
+    #     print("Send follow command")
+    #     success = block_until_arm_arrives(self._robot_command_client, cmd_id, 6.0)
+    #     print(f"success: {success}")
+
+    #     # if success == False:
+    #     #     print("Move body")
+    #     #     follow_arm_command = RobotCommandBuilder.follow_arm_command()
+    #     #     command = RobotCommandBuilder.build_synchro_command(follow_arm_command, arm_command)
+    #     #     _, _, cmd_id = self._robot_command(follow_arm_command)
+
+    #     #time.sleep(0.1)
+    #     #return self._robot_command_client._get_robot_command_feedback_request(cmd_id)#WRITTEN BY THE UNDERGRADS (6/15/23 2pm)
+    #     return self._robot_command_client.robot_command_feedback(cmd_id) # Are added this so we can access trajectory plan from feedback response
+    #     # return cmd_id # Are added this so we can access trajectory plan from feSedback response
+
+    #     #  rostopic pub -r 10 /arm_pose_stamped geometry_msgs/PoseStamped '{header: {stamp: now, frame_id: "map"}, pose: {position: {x: 1.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}'
 
 
     def set_gripper(self, gripper_value):
@@ -993,11 +1044,30 @@ class SpotWrapper():
 
         # command = synchro_velocity_command_stub(v_x=v_x, v_y=v_y, v_rot=v_rot, params=self._mobility_params)
         # response = self._robot_command(command)
-        #### End Calvin
+        ### End Calvin
 
-        response = self._robot_command(RobotCommandBuilder.synchro_velocity_command(
-                                      v_x=v_x, v_y=v_y, v_rot=v_rot, params=self._mobility_params),
-                                      end_time_secs=end_time, timesync_endpoint=self._robot.time_sync.endpoint)
+        # response = self._robot_command(RobotCommandBuilder.synchro_velocity_command(
+        #                               v_x=v_x, v_y=v_y, v_rot=v_rot, params=self._mobility_params),
+        #                               end_time_secs=end_time, timesync_endpoint=self._robot.time_sync.endpoint)
+
+        # move spot
+        mobility_command = RobotCommandBuilder.synchro_velocity_command(
+            v_x=v_x, v_y=v_y, v_rot=v_rot, params=self._mobility_params
+        )
+
+        # freeze the arm 
+        #arm_command = RobotCommandBuilder.arm_joint_freeze_command()
+        arm_command = robot_command_pb2.RobotCommand()
+        arm_command.synchronized_command.arm_command.arm_joint_move_command.trajectory.points.add()
+
+        #sync the commands
+        synchro_cmd = RobotCommandBuilder.build_synchro_command(mobility_command, arm_command)
+
+        response = self._robot_command(
+            synchro_cmd,
+            end_time_secs=end_time,
+            timesync_endpoint=self._robot.time_sync.endpoint
+        )
                                       
         self._last_velocity_command_time = end_time
         # print("Velocity command response")
