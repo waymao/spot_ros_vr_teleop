@@ -1,55 +1,7 @@
 #!/usr/bin/env python3
-import cProfile
 import rospy
-import tf2_ros
-import tf2_geometry_msgs
-from geometry_msgs.msg import TransformStamped
 
-class MultiSpotTransformPublisher:
-    def __init__(self, source_frame="spot2", target_frame="spot"):
-        self.pub = rospy.Publisher('spot_tf_compute', TransformStamped, queue_size=10)
-        self.cam_pub = rospy.Publisher('spot_cam_tf_compute', TransformStamped, queue_size=10)
-        
-        # Reduce cache time - you're only using "now" transforms
-        self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(0.5))
-        self.listener = tf2_ros.TransformListener(self.tf_buffer)
-        
-        # Use a timer callback instead of a while loop
-        self.rate = 10  # 10 Hz
-        self.timer = rospy.Timer(rospy.Duration(1.0/self.rate), self.timer_callback)
-        
-        self.source_frame = source_frame
-        self.target_frame = target_frame
-        
-        # Create full frame names once to avoid string concatenation in the loop
-        self.source_body_frame = f"{source_frame}/body"
-        self.target_body_frame = f"{target_frame}/body"
-        self.source_camera_frame = f"{source_frame}/frontright_fisheye"
-        self.target_camera_frame = f"{target_frame}/frontright_fisheye"
-    
-    def timer_callback(self, event):
-        try:
-            # Use shorter timeout - if transform isn't available quickly, it's probably not there
-            transform = self.tf_buffer.lookup_transform(
-                self.target_body_frame, 
-                self.source_body_frame, 
-                rospy.Time(0), 
-                rospy.Duration(0.1)
-            )
-            self.pub.publish(transform)
-            
-            # Optional camera transform lookup
-            # cam_transform = self.tf_buffer.lookup_transform(
-            #     self.target_camera_frame, 
-            #     self.source_camera_frame, 
-            #     rospy.Time(0), 
-            #     rospy.Duration(0.1)
-            # )
-            # self.cam_pub.publish(cam_transform)
-            
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
-            # Use lower severity for expected exceptions to reduce log spam
-            rospy.logdebug("Could not get transform: %s", e)
+from spot_driver.dual_spot_utils.tf_compute_graphnav import MultiSpotTransformPublisher
 
 if __name__ == "__main__":
     rospy.init_node('spot_tf_compute')
