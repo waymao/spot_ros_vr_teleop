@@ -35,7 +35,7 @@
     <param name="auto_stand"    value="$(arg auto_stand)"/>
     <param name="take_lease"    value="$(arg take_lease)"/>
     <param name="mode_parent_odom_tf" value="vision" />
-    <param name="map_path" value="/home/ericbot/Trajectories/demo/"/>
+    <param name="map_path" value="/home/vr-teleop/Trajectories/demo/"/>
     <param name="username" value="$(arg username)" />
     <param name="password" value="$(arg password)" />
     <param name="hostname" value="$(arg hostname)" />
