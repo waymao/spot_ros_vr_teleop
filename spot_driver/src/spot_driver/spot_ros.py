@@ -514,8 +514,47 @@ class SpotROS():
                 self.trajectory_server.set_aborted(TrajectoryResult(False, "Failed to reach goal"))
 
     def cmdVelCallback(self, data):
-        """Callback for cmd_vel command"""
-        self.spot_wrapper.velocity_cmd(data.linear.x, data.linear.y, data.angular.z, data.linear.z)
+        """Callback for cmd_vel command - converted to trajectory command"""
+        import numpy as np
+        
+        # Convert velocity to trajectory command by integrating over a small time step
+        dt = 0.1  # Time step for trajectory command (100ms)
+        
+        # Integrate velocity to get position change
+        delta_x = data.linear.x * dt
+        delta_y = data.linear.y * dt
+        delta_heading = data.angular.z * dt
+        
+        # Update current position estimate (initialize if not exists)
+        if not hasattr(self, '_current_position'):
+            self._current_position = np.array([0.0, 0.0, 0.0])  # x, y, heading
+        
+        self._current_position[0] += delta_x
+        self._current_position[1] += delta_y
+        self._current_position[2] += delta_heading
+        
+        # Normalize heading to [-pi, pi]
+        self._current_position[2] = np.arctan2(np.sin(self._current_position[2]), np.cos(self._current_position[2]))
+        
+        # Use trajectory command instead of velocity command
+        # Convert heading to quaternion for trajectory command
+        from bosdyn.client import math_helpers
+        quat = math_helpers.Quat.from_yaw(self._current_position[2])
+        
+        try:
+            # Send trajectory command with small duration for smooth movement
+            resp = self.spot_wrapper.trajectory_cmd(
+                goal_x=self._current_position[0],
+                goal_y=self._current_position[1], 
+                goal_heading=self._current_position[2],
+                cmd_duration=dt,
+                frame_name='body',
+                precise_position=False
+            )
+        except Exception as e:
+            rospy.logwarn(f"Failed to send trajectory command: {e}")
+            # Fallback to original velocity command if trajectory fails
+            self.spot_wrapper.velocity_cmd(data.linear.x, data.linear.y, data.angular.z, data.linear.z)
 
     def ikCallback(self, data):
         """Callback for inv_kinematics command"""
@@ -552,7 +591,8 @@ class SpotROS():
         quat_y = data.pose.orientation.y 
         quat_z = data.pose.orientation.z 
         quat_w = data.pose.orientation.w 
-        feedback = self.spot_wrapper.arm_pose_cmd(pos_x,pos_y,pos_z,quat_x,quat_y,quat_z,quat_w,seconds=-1)
+        feedback = self.spot_wrapper.arm_pose_cmd(pos_x,pos_y,pos_z,quat_x,quat_y,quat_z,quat_w,seconds=.5)
+        print("feedback:", feedback)
 
     def joystickCallback(self, data):
         pos_x = data.pose.position.x
@@ -840,6 +880,7 @@ class SpotROS():
                 rospy.loginfo("Lease claimed")
             
             if self._upload_filepath is not None:
+                rospy.loginfo("Uploading map")
                 self._upload_graph_and_snapshots()
                 self.spot_wrapper._set_initial_localization_fiducial()
                 self.spot_wrapper._get_localization_state()
